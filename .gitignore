@@ -52,4 +52,10 @@ Mkfile.old
 dkms.conf
 
 .idea
+.rspec
+.bundle
 cmake-build-debug
+/bin
+/spec
+Gemfile
+Gemfile.lock
