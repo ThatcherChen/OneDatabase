@@ -7,4 +7,4 @@ include_directories(.)
 
 add_executable(OneDatabase
         main.c
-        )
+        main.h)
