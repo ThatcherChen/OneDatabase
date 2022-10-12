@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
+#include <limits.h>
 
 
 #define COLUMN_USERNAME_SIZE 32

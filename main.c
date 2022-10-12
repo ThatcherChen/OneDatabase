@@ -1,6 +1,6 @@
 #include "main.h"
 
-// constants
+// Constants
 const uint32_t ID_SIZE = size_of_attribute(Row, id);
 const uint32_t USERNAME_SIZE = size_of_attribute(Row, username);
 const uint32_t EMAIL_SIZE = size_of_attribute(Row, email);
@@ -13,7 +13,7 @@ const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
 const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
 
 
-// User Interface Functions
+// I/O Functions
 InputBuffer *new_input_buffer() {
     InputBuffer *input_Buffer = (InputBuffer *) malloc(sizeof(InputBuffer));
     input_Buffer->buffer = NULL;
@@ -23,17 +23,10 @@ InputBuffer *new_input_buffer() {
     return input_Buffer;
 }
 
-void print_prompt() {
-    printf("OneDB > ");
-}
-
-void print_row(Row *row) {
-    printf("(%d, %s, %s)\n", row->id, row->username, row->email);
-}
-
 void read_input(InputBuffer *inputBuffer) {
     ssize_t bytes_read = getline(&(inputBuffer->buffer), &(inputBuffer->buffer_length), stdin);
 
+    // Error situation
     if (bytes_read <= 0) {
         printf("Error reading input\n");
         exit(EXIT_FAILURE);
@@ -49,8 +42,17 @@ void close_input_buffer(InputBuffer *input_buffer) {
     free(input_buffer);
 }
 
-// Command
+void print_prompt() {
+    printf("OneDB > ");
+}
+
+void print_row(Row *row) {
+    printf("(%d, %s, %s)\n", row->id, row->username, row->email);
+}
+
+// MetaCommand Handle
 MetaCommandResult do_meta_command(InputBuffer *input_buffer, Table *table) {
+    // Now it only supports meta command ".exit"
     if (strcmp(input_buffer->buffer, ".exit") == 0) {
         db_close(table);
         exit(EXIT_SUCCESS);
@@ -59,9 +61,24 @@ MetaCommandResult do_meta_command(InputBuffer *input_buffer, Table *table) {
     }
 }
 
+// Normal Command prepare classifier
+PrepareResult prepare_statement(InputBuffer *input_buffer, Statement *statement) {
+    if (strncmp(input_buffer->buffer, "insert", 6) == 0) {
+        return prepare_insert(input_buffer, statement);
+    }
+    if (strcmp(input_buffer->buffer, "select") == 0) {
+        statement->type = STATEMENT_SELECT;
+        return PREPARE_SUCCESS;
+    }
+
+    return PREPARE_UNRECOGNIZED_STATEMENT;
+}
+
+// Command "insert" preparer
 PrepareResult prepare_insert(InputBuffer *inputBuffer, Statement *statement) {
     statement->type = STATEMENT_INSERT;
 
+    // Actually keyword is "insert"
     char *keyword = strtok(inputBuffer->buffer, " ");
     char *id_string = strtok(NULL, " ");
     char *username = strtok(NULL, " ");
@@ -89,38 +106,17 @@ PrepareResult prepare_insert(InputBuffer *inputBuffer, Statement *statement) {
     return PREPARE_SUCCESS;
 }
 
-PrepareResult prepare_statement(InputBuffer *input_buffer, Statement *statement) {
-    if (strncmp(input_buffer->buffer, "insert", 6) == 0) {
-        return prepare_insert(input_buffer, statement);
+// Normal Command execute classifier
+ExecuteResult execute_statement(Statement *statement, Table *table) {
+    switch (statement->type) {
+        case (STATEMENT_INSERT):
+            return execute_insert(statement, table);
+        case (STATEMENT_SELECT):
+            return execute_select(statement, table);
     }
-    if (strcmp(input_buffer->buffer, "select") == 0) {
-        statement->type = STATEMENT_SELECT;
-        return PREPARE_SUCCESS;
-    }
-
-    return PREPARE_UNRECOGNIZED_STATEMENT;
 }
 
-void serialize_row(Row *source, void *destination) {
-    memcpy(destination + ID_OFFSET, &(source->id), ID_SIZE);
-    strncpy(destination + USERNAME_OFFSET, source->username, USERNAME_SIZE);
-    strncpy(destination + EMAIL_OFFSET, source->email, EMAIL_SIZE);
-}
-
-void deserialize_row(void *source, Row *destination) {
-    memcpy(&(destination->id), source + ID_OFFSET, ID_SIZE);
-    memcpy(&(destination->username), source + USERNAME_OFFSET, USERNAME_SIZE);
-    memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
-}
-
-void *row_slot(Table *table, uint32_t row_num) {
-    uint32_t page_num = row_num / ROWS_PER_PAGE;
-    void *page = get_page(table->pager, page_num);
-    uint32_t row_offset = row_num % ROWS_PER_PAGE;
-    uint32_t byte_offset = row_offset * ROW_SIZE;
-    return page + byte_offset;
-}
-
+// Command "insert" executor
 ExecuteResult execute_insert(Statement *statement, Table *table) {
     if (table->num_rows >= TABLE_MAX_ROWS) {
         return EXECUTE_TABLE_FULL;
@@ -134,6 +130,7 @@ ExecuteResult execute_insert(Statement *statement, Table *table) {
     return EXECUTE_SUCCESS;
 }
 
+// Command "select" executor
 ExecuteResult execute_select(Statement *statement, Table *table) {
     Row row;
     for (uint32_t i = 0; i < table->num_rows; ++i) {
@@ -143,65 +140,7 @@ ExecuteResult execute_select(Statement *statement, Table *table) {
     return EXECUTE_SUCCESS;
 }
 
-ExecuteResult execute_statement(Statement *statement, Table *table) {
-    switch (statement->type) {
-        case (STATEMENT_INSERT):
-            return execute_insert(statement, table);
-        case (STATEMENT_SELECT):
-            return execute_select(statement, table);
-    }
-}
-
-void *get_page(Pager *pager, uint32_t page_num) {
-    if (page_num > TABLE_MAX_PAGES) {
-        printf("Tried to fetch page number out of bounds. %d > %d\n", page_num, TABLE_MAX_PAGES);
-        exit(EXIT_FAILURE);
-    }
-
-    if (pager->pages[page_num] == NULL) {
-        void *page = calloc(1, PAGE_SIZE);
-        uint32_t num_pages = pager->file_length / PAGE_SIZE;
-
-        if (pager->file_length % PAGE_SIZE) {
-            num_pages += 1;
-        }
-
-        if (page_num <= num_pages) {
-            lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
-            ssize_t  bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
-            if (bytes_read == -1) {
-                printf("Error reading file: %d\n", errno);
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        pager->pages[page_num] = page;
-    }
-
-    return pager->pages[page_num];
-}
-
-Pager *pager_open(const char *filename) {
-    int fd = open(filename, O_RDWR | O_CREAT, S_IWUSR | S_IRUSR);
-
-    if (fd == -1) {
-        printf("Unable to open file.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    off_t file_length = lseek(fd, 0, SEEK_END);
-
-    Pager *pager = (Pager *) malloc(sizeof (Pager));
-    pager->file_descriptor = fd;
-    pager->file_length = file_length;
-
-    for (uint32_t i = 0; i < TABLE_MAX_PAGES; ++i) {
-        pager->pages[i] = NULL;
-    }
-
-    return pager;
-}
-
+// Databases file control
 Table *db_open(const char *filename) {
     Pager *pager = pager_open(filename);
     uint32_t num_rows = pager->file_length / ROW_SIZE;
@@ -250,6 +189,28 @@ void db_close(Table *table) {
     free(table);
 }
 
+// Pager manager
+Pager *pager_open(const char *filename) {
+    int fd = open(filename, O_RDWR | O_CREAT, S_IWUSR | S_IRUSR);
+
+    if (fd == -1) {
+        printf("Unable to open file.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    off_t file_length = lseek(fd, 0, SEEK_END);
+
+    Pager *pager = (Pager *) malloc(sizeof (Pager));
+    pager->file_descriptor = fd;
+    pager->file_length = file_length;
+
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; ++i) {
+        pager->pages[i] = NULL;
+    }
+
+    return pager;
+}
+
 void pager_flush(Pager *pager, uint32_t page_num, uint32_t size) {
     if (pager->pages[page_num] == NULL) {
         printf("Tried to flush null page.\n");
@@ -271,20 +232,81 @@ void pager_flush(Pager *pager, uint32_t page_num, uint32_t size) {
     }
 }
 
+void *get_page(Pager *pager, uint32_t page_num) {
+    if (page_num > TABLE_MAX_PAGES) {
+        printf("Tried to fetch page number out of bounds. %d > %d\n", page_num, TABLE_MAX_PAGES);
+        exit(EXIT_FAILURE);
+    }
+
+    if (pager->pages[page_num] == NULL) {
+        void *page = calloc(1, PAGE_SIZE);
+        uint32_t num_pages = pager->file_length / PAGE_SIZE;
+
+        if (pager->file_length % PAGE_SIZE) {
+            num_pages += 1;
+        }
+
+        if (page_num <= num_pages) {
+            lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
+            ssize_t  bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
+            if (bytes_read == -1) {
+                printf("Error reading file: %d\n", errno);
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        pager->pages[page_num] = page;
+    }
+
+    return pager->pages[page_num];
+}
+
+// Row handle
+void serialize_row(Row *source, void *destination) {
+    memcpy(destination + ID_OFFSET, &(source->id), ID_SIZE);
+    strncpy(destination + USERNAME_OFFSET, source->username, USERNAME_SIZE);
+    strncpy(destination + EMAIL_OFFSET, source->email, EMAIL_SIZE);
+}
+
+void deserialize_row(void *source, Row *destination) {
+    memcpy(&(destination->id), source + ID_OFFSET, ID_SIZE);
+    memcpy(&(destination->username), source + USERNAME_OFFSET, USERNAME_SIZE);
+    memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
+}
+
+void *row_slot(Table *table, uint32_t row_num) {
+    uint32_t page_num = row_num / ROWS_PER_PAGE;
+    void *page = get_page(table->pager, page_num);
+    uint32_t row_offset = row_num % ROWS_PER_PAGE;
+    uint32_t byte_offset = row_offset * ROW_SIZE;
+    return page + byte_offset;
+}
+
+
 int main(int argc, char *argv[]) {
+
+    // Error detect
     if (argc < 2) {
         printf("Must supply a database filename.\n");
         exit(EXIT_FAILURE);
     }
 
+    // read and open the database file.
     char *filename = argv[1];
     Table *table = db_open(filename);
 
+    // create an input buffer
     InputBuffer *input_buffer = new_input_buffer();
-    while (true) {
+
+    while (true) { // main loop
+
+        // print prompt
         print_prompt();
+
+        // read input
         read_input(input_buffer);
 
+        // meta command detect
         if (input_buffer->buffer[0] == '.') {
             switch (do_meta_command(input_buffer, table)) {
                 case META_COMMAND_SUCCESS:
@@ -295,7 +317,10 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        // normal command
         Statement statement;
+
+        // prepare
         switch (prepare_statement(input_buffer, &statement)) {
             case (PREPARE_SUCCESS):
                 break;
@@ -313,6 +338,7 @@ int main(int argc, char *argv[]) {
                 continue;
         }
 
+        // execute normal command
         switch (execute_statement(&statement, table)) {
             case (EXECUTE_SUCCESS):
                 printf("Executed.\n");
